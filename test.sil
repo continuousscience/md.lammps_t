@@ -1,0 +1,1 @@
+ok = delay test_base(lammps_t)
