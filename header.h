@@ -27,7 +27,8 @@ typedef struct {
     void *lmp;
     char *err; // NULL unless "An error occurred."
     LmpDatum *dat; // linked list
-    int initialized;
+    uint64_t steps; // total lammps steps (needed for restart)
+    int initialized; // whether atoms exist or not
 } LAMMPS;
 
 static const unsigned char lammps_hash[HASH_SIZE+1] = /*!hash!*/;
@@ -156,22 +157,27 @@ static LAMMPS *open_lammps() {
     return lmp;
 }
 
-// lmp->dat == NULL -- create a new 'restart' file and ignore init flag.
+// lmp->dat == NULL -- create new log/dump files and ignore init flag.
 //   init == 0 : run commands in file directly
-//   init != 0 : read 'restart' file
-static void startup_lammps(LAMMPS *lmp, int init) {
-    if(lmp->dat == NULL) {
+//   init != 0 : read 'restart' file at point 'steps'
+static void startup_lammps(LAMMPS *lmp, int init, int steps) {
+    if(lmp->dat == NULL || lmp->dat->next == NULL) {
+        new_datum(&lmp->dat, NULL, 0);
         new_datum(&lmp->dat, NULL, 0);
         lmp->initialized = 0;
         return;
     }
-    if(init == 0) {
-        lammps_file(lmp->lmp, lmp->dat->name);
-        lmp->initialized = 0;
-    } else {
-        char cmd[] = "read_restart /tmp/lmp.XXXXXXXX";
-        memcpy(cmd+13, lmp->dat->name, 17);
+
+    lammps_file(lmp->lmp, lmp->dat->name);
+    lmp->initialized = init;
+    if(init) {
+        char *cmd;
+        lmp->steps = steps;
+        asprintf(&cmd, "read_dump %s %d x y z vx vy vz",
+                        lmp->dat->next->name, steps);
         lammps_command(lmp->lmp, cmd);
+        put_datum(lmp->dat, 1, NULL, 0); // clear space
+        free(cmd);
         lmp->initialized = 1;
     }
 }

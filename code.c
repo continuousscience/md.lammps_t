@@ -8,16 +8,18 @@ void  lammps_close(void *);
 int   lammps_get_natoms(void *);
 
 // Returns 0 on success or -1 otherwise.
-static int write_restart(LAMMPS *lmp) {
-    char cmd[] = "write_restart /tmp/lmp.XXXXXXXX";
+static int write_dump(LAMMPS *lmp) {
+    char cmd[] = "write_dump all custom /tmp/lmp.XXXXXXXX id type x y z vx vy vz";
 
-    if(lmp->dat == NULL) {
+    if(!lmp->initialized) return 0; // not needed.
+
+    if(lmp->dat == NULL || lmp->dat->next == NULL) {
         fprintf(stderr, "lammps_t: Error creating temp file.\n");
         return -1;
     }
 
-    put_datum(lmp->dat, 0, NULL, 0);
-    memcpy(cmd+14, lmp->dat->name, 17);
+    put_datum(lmp->dat, 1, NULL, 0);
+    memcpy(cmd+22, lmp->dat->next->name, 17);
     lammps_command(lmp->lmp, cmd);
     return 0;
 }
@@ -32,15 +34,14 @@ char *show(const LAMMPS *lmp) {
     return out;
 }
 
-// [byte init?] [uint64 size] [size bytes] [uint64 size] [size bytes] ...
+// [steps] [init?] [uint64 size] [size bytes] [uint64 size] [size bytes] ...
 // file 0 is a list of commands if !init
 // else file 0 is write_restart data.
 size_t size(LAMMPS *lmp) {
-    size_t len = size_uint32(1); // first byte is init bit.
-    if(lmp->initialized) { // must use write_restart.
-        if(write_restart(lmp)) {
-            return 0;
-        }
+    size_t len = size_uint64(lmp->steps)
+               + size_uint32(lmp->initialized);
+    if(write_dump(lmp)) {
+        return 0;
     }
     
     int n = 0;
@@ -58,6 +59,7 @@ size_t size(LAMMPS *lmp) {
 void serialize(SWriter *s, LAMMPS *lmp) {
     char buf[DAT_BUFLEN];
 
+    write_uint64(s, lmp->steps);
     write_uint32(s, lmp->initialized != 0);
 
     // Serialize all files (size is always called first).
@@ -77,6 +79,7 @@ void serialize(SWriter *s, LAMMPS *lmp) {
             tot -= len;
         }
     }
+    put_datum(lmp->dat, 1, NULL, 0);
 }
 
 void handler(LAMMPS *lmp) {
@@ -90,12 +93,15 @@ void handler(LAMMPS *lmp) {
 void parse(sil_State *S, const uint8_t *buf, size_t len) {
     LAMMPS *lmp;
     unsigned k;
+    uint64_t steps;
     uint32_t init;
 
     if(!len) {
         sil_err(S, "Unable to read LAMMPS restart file.");
         return;
     }
+    k = read_uint64(&steps, buf, len);
+    len -= k; buf += k;
     k = read_uint32(&init, buf, len);
     len -= k; buf += k;
     if(!len) {
@@ -119,7 +125,7 @@ void parse(sil_State *S, const uint8_t *buf, size_t len) {
         
         len -= tot; buf += tot;
     }
-    startup_lammps(lmp, init);
+    startup_lammps(lmp, init, steps);
 
     sil_pushlammps(S, lmp);
     return;
@@ -137,27 +143,27 @@ void copy(sil_State *S) {
 
     if(lmp == NULL) {
         sil_err(S, "Can't copy - no LAMMPS present.");
-        S->st = NULL;
-        return;
+        goto err;
     }
 
-    if(lmp->initialized) {
-        write_restart(lmp);
+    if(write_dump(lmp)) {
+        sil_err(S, "Can't copy - lammps dump error.");
+        goto err;
     }
     if( (dat = copy_datums(lmp->dat)) == NULL) {
         sil_err(S, "Can't copy - datum copy error.");
-        S->st = NULL;
-        return;
+        goto err;
     }
     if( (lmp_copy = open_lammps()) == NULL) {
         sil_err(S, "Can't copy - LAMMPS restart error.");
         free_datums(dat);
-        S->st = NULL;
-        return;
+        goto err;
     }
     lmp_copy->dat = dat;
-    startup_lammps(lmp_copy, lmp->initialized);
+    startup_lammps(lmp_copy, lmp->initialized, lmp->steps);
+    put_datum(lmp->dat, 1, NULL, 0);
 
+err:
     sil_setST(S, lmp_copy, sizeof(LAMMPS));
 }
 
