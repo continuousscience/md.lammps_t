@@ -38,6 +38,12 @@ static inline int sil_pushlammps(sil_State *S, LAMMPS *lmp) {
     return sil_newuserdata(S, lammps_hash, lmp);
 }
 
+#define write_number(s,n) { \
+    (s)[0] = '0'+(n/100)%10; \
+    (s)[1] = '0'+(n/10)%10; \
+    (s)[2] = '0'+(n/1)%10; \
+}
+
 // File Management API impl.
 static int new_datum(LmpDatum **datp, const char *buf, size_t len) {
     LmpDatum *dat;
@@ -157,16 +163,37 @@ static LAMMPS *open_lammps() {
     return lmp;
 }
 
+// Declare string-variables for names of all datums to lammps.
+static int declare_datum(LAMMPS *lmp, int n) {
+    char cmd[] = "variable datumNNN string \"/tmp/lmp.XXXXXXXX\"";
+    LmpDatum *dat = *get_datum(&lmp->dat, n);
+    if(dat == NULL) return 1;
+    
+    write_number(cmd+14, n);
+    memcpy(cmd+26, dat->name, 17);
+    lammps_command(lmp->lmp, cmd);
+    return 0;
+}
+
 // lmp->dat == NULL -- create new log/dump files and ignore init flag.
-//   init == 0 : run commands in file directly
-//   init != 0 : read 'restart' file at point 'steps'
+//
+// lmp->dat != NULL --
+//    declares all datums in lmp->dat (except datum0)
+//    runs commands in file directly
+//    if init != 0, it also reads coordinates and velocities
+//    from the dump-file at point 'steps'
+//
 static void startup_lammps(LAMMPS *lmp, int init, int steps) {
     if(lmp->dat == NULL || lmp->dat->next == NULL) {
         new_datum(&lmp->dat, NULL, 0);
         new_datum(&lmp->dat, NULL, 0);
+        declare_datum(lmp, 1);
         lmp->initialized = 0;
         return;
     }
+
+    // declare datums 1+
+    for(int n = 1; !declare_datum(lmp, n); n++);
 
     lammps_file(lmp->lmp, lmp->dat->name);
     lmp->initialized = init;

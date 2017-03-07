@@ -9,7 +9,7 @@ int   lammps_get_natoms(void *);
 
 // Returns 0 on success or -1 otherwise.
 static int write_dump(LAMMPS *lmp) {
-    char cmd[] = "write_dump all custom /tmp/lmp.XXXXXXXX id type x y z vx vy vz";
+    char cmd[] = "write_dump all custom ${datum1} id type x y z vx vy vz";
 
     if(!lmp->initialized) return 0; // not needed.
 
@@ -119,7 +119,7 @@ void parse(sil_State *S, const uint8_t *buf, size_t len) {
         k = read_uint64(&tot, buf, len);
         len -= k; buf += k;
         tot = tot < len ? tot : len;
-        if(new_datum(&lmp->dat, (char *)buf, tot)) {
+        if(new_datum(&lmp->dat, (char *)buf, tot) < 0) {
             goto err;
         }
         
